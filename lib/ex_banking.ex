@@ -2,6 +2,9 @@ defmodule ExBanking do
   @moduledoc """
   Documentation for `ExBanking`.
   """
+  alias ExBanking.User
+  require Logger
+
   @type banking_error ::
           {:error,
            :wrong_arguments
@@ -13,13 +16,20 @@ defmodule ExBanking do
            | :too_many_requests_to_user
            | :too_many_requests_to_sender
            | :too_many_requests_to_receiver}
+
   @doc """
   * Function creates a new user in the system
   * New user has zero balance of any currency
   """
   @spec create_user(user :: String.t()) :: :ok | banking_error
   def create_user(user) do
-    IO.inspect(:create_user)
+    with [] <- :ets.lookup(:ex_banking, String.to_atom(user)),
+         {:ok, created_user} <- User.add_user(user) do
+      :ets.insert(:ex_banking, {String.to_atom(user), created_user})
+      :ok
+    else
+      [_ | _] -> {:error, :user_already_exist}
+    end
   end
 
   @doc """
@@ -29,7 +39,21 @@ defmodule ExBanking do
   @spec deposit(user :: String.t(), amount :: number, currency :: String.t()) ::
           {:ok, new_balance :: number} | banking_error
   def deposit(user, amount, currency) do
-    IO.inspect(:deposit)
+    with [{name, state}] <- lookup(user),
+         {:ok, cross_rate} <- Money.cross_rate(state.money, currency),
+         {:ok, deposit_money} <- Money.mult(Money.new(state.money.currency, 1), cross_rate),
+         {:ok, current_money} <- Money.add(state.money, deposit_money) do
+      IO.inspect(current_money)
+      new_state = %{state | money: current_money}
+      :ets.insert(:ex_banking, {name, new_state})
+      {:ok, current_money}
+    else
+      _ -> {:error, :user_does_not_exist}
+    end
+  end
+
+  def lookup(user) do
+    :ets.lookup(:ex_banking, String.to_atom(user))
   end
 
   @doc """
@@ -47,7 +71,7 @@ defmodule ExBanking do
   """
   @spec get_balance(user :: String.t(), currency :: String.t()) ::
           {:ok, balance :: number} | banking_error
-  def get_balance(user, amount, currency) do
+  def get_balance(user, currency) do
     IO.inspect(:get_balance)
   end
 
@@ -62,4 +86,8 @@ defmodule ExBanking do
           amount :: number,
           currency :: String.t()
         ) :: {:ok, from_user_balance :: number, to_user_balance :: number} | banking_error
+
+  def send(from_user, to_user, amount, currency) do
+    IO.inspect(:send)
+  end
 end

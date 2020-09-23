@@ -3,7 +3,6 @@ defmodule ExBanking do
   Documentation for `ExBanking`.
   """
   alias ExBanking.User
-  require Logger
 
   @type banking_error ::
           {:error,
@@ -39,15 +38,19 @@ defmodule ExBanking do
   @spec deposit(user :: String.t(), amount :: number, currency :: String.t()) ::
           {:ok, new_balance :: number} | banking_error
   def deposit(user, amount, currency) do
-    with [{name, state}] <- lookup(user),
-         {:ok, cross_rate} <- Money.cross_rate(state.money, currency),
-         {:ok, deposit_money} <- Money.mult(Money.new(state.money.currency, 1), cross_rate),
+    with amount <- Decimal.new(amount),
+         {false, amount} <- {Decimal.negative?(amount), amount},
+         [{name, state}] <- lookup(user),
+         {:ok, deposit_money} <-
+           Money.new(currency, amount) |> Money.to_currency(state.money.currency),
+         deposit_money <- deposit_money |> Money.round(),
          {:ok, current_money} <- Money.add(state.money, deposit_money) do
       new_state = %{state | money: current_money}
       :ets.insert(:ex_banking, {name, new_state})
       {:ok, current_money.amount}
     else
-      _ -> {:error, :user_does_not_exist}
+      [] -> {:error, :user_does_not_exist}
+      _error -> {:error, :wrong_arguments}
     end
   end
 
@@ -58,18 +61,23 @@ defmodule ExBanking do
   @spec withdraw(user :: String.t(), amount :: number, currency :: String.t()) ::
           {:ok, new_balance :: number} | banking_error
   def withdraw(user, amount, currency) do
-    with [{name, state}] <- lookup(user),
-         {:ok, cross_rate} <- Money.cross_rate(state.money, currency),
-         {:ok, withdraw_money} <- Money.mult(Money.new(state.money.currency, 1), cross_rate),
+    with amount <- Decimal.new(amount),
+         {false, amount} <- {Decimal.negative?(amount), amount},
+         [{name, state}] <- lookup(user),
+         {:ok, withdraw_money} <-
+           Money.new(currency, amount) |> Money.to_currency(state.money.currency),
+         withdraw_money <- withdraw_money |> Money.round(),
          :gt <-
-           Money.compare(state.money, Money.new(state.money.currency, 0)),
+           Money.compare(state.money, withdraw_money),
          {:ok, current_money} <- Money.sub(state.money, withdraw_money) do
       new_state = %{state | money: Money.abs(current_money)}
       :ets.insert(:ex_banking, {name, new_state})
       {:ok, Money.abs(current_money).amount}
     else
       :eq -> {:error, :not_enough_money}
-      _ -> {:error, :user_does_not_exist}
+      :lt -> {:error, :not_enough_money}
+      [] -> {:error, :user_does_not_exist}
+      _error -> {:error, :wrong_arguments}
     end
   end
 
@@ -80,8 +88,7 @@ defmodule ExBanking do
           {:ok, balance :: number} | banking_error
   def get_balance(user, currency) do
     with [{key, state}] <- lookup(user),
-         {:ok, cross_rate} <- Money.cross_rate(state.money, currency),
-         {:ok, current_money} <- Money.mult(state.money, cross_rate) do
+         {:ok, current_money} <- state.money |> Money.to_currency(currency) do
       {:ok, current_money}
     else
       [] -> {:error, :user_does_not_exist}

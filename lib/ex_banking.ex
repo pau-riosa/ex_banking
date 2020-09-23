@@ -38,16 +38,13 @@ defmodule ExBanking do
   @spec deposit(user :: String.t(), amount :: number, currency :: String.t()) ::
           {:ok, new_balance :: number} | banking_error
   def deposit(user, amount, currency) do
-    with amount <- Decimal.new(amount),
-         {false, amount} <- {Decimal.negative?(amount), amount},
-         [{name, state}] <- lookup(user),
-         {:ok, deposit_money} <-
-           Money.new(currency, amount) |> Money.to_currency(state.money.currency),
-         deposit_money <- deposit_money |> Money.round(),
-         {:ok, current_money} <- Money.add(state.money, deposit_money) do
-      new_state = %{state | money: current_money}
+    with [{name, state}] <- lookup(user),
+         {false, amount} <- is_negative?(amount),
+         deposit_money <- compute_money(state, amount, currency),
+         {:ok, new_balance} <- Money.add(state.money, deposit_money) do
+      new_state = %{state | money: new_balance}
       :ets.insert(:ex_banking, {name, new_state})
-      {:ok, current_money.amount}
+      {:ok, new_balance.amount}
     else
       [] -> {:error, :user_does_not_exist}
       _error -> {:error, :wrong_arguments}
@@ -61,18 +58,15 @@ defmodule ExBanking do
   @spec withdraw(user :: String.t(), amount :: number, currency :: String.t()) ::
           {:ok, new_balance :: number} | banking_error
   def withdraw(user, amount, currency) do
-    with amount <- Decimal.new(amount),
-         {false, amount} <- {Decimal.negative?(amount), amount},
-         [{name, state}] <- lookup(user),
-         {:ok, withdraw_money} <-
-           Money.new(currency, amount) |> Money.to_currency(state.money.currency),
-         withdraw_money <- withdraw_money |> Money.round(),
+    with [{name, state}] <- lookup(user),
+         {false, amount} <- is_negative?(amount),
+         withdraw_money <- compute_money(state, amount, currency),
          :gt <-
            Money.compare(state.money, withdraw_money),
-         {:ok, current_money} <- Money.sub(state.money, withdraw_money) do
-      new_state = %{state | money: Money.abs(current_money)}
+         {:ok, new_balance} <- Money.sub(state.money, withdraw_money) do
+      new_state = %{state | money: Money.abs(new_balance)}
       :ets.insert(:ex_banking, {name, new_state})
-      {:ok, Money.abs(current_money).amount}
+      {:ok, Money.abs(new_balance).amount}
     else
       :eq -> {:error, :not_enough_money}
       :lt -> {:error, :not_enough_money}
@@ -88,7 +82,8 @@ defmodule ExBanking do
           {:ok, balance :: number} | banking_error
   def get_balance(user, currency) do
     with [{key, state}] <- lookup(user),
-         {:ok, current_money} <- state.money |> Money.to_currency(currency) do
+         {:ok, current_money} <- state.money |> Money.to_currency(currency),
+         current_money <- current_money |> Money.round() do
       {:ok, current_money}
     else
       [] -> {:error, :user_does_not_exist}
@@ -108,10 +103,31 @@ defmodule ExBanking do
         ) :: {:ok, from_user_balance :: number, to_user_balance :: number} | banking_error
 
   def send(from_user, to_user, amount, currency) do
-    IO.inspect(:send)
+    with {{:ok, _amount}, :sender} <- {withdraw(from_user, amount, currency), :sender},
+         {{:ok, _amount}, :receiver} <- {deposit(to_user, amount, currency), :receiver},
+         {:ok, from_user_balance} <- get_balance(from_user, currency),
+         {:ok, to_user_balance} <- get_balance(to_user, currency) do
+      {:ok, from_user_balance, to_user_balance}
+    else
+      {{:error, :not_enough_money}, :sender} -> {:error, :not_enough_money}
+      {{:error, :not_enough_money}, :receiver} -> {:error, :not_enough_money}
+      {{:error, :user_does_not_exist}, :sender} -> {:error, :sender_does_not_exist}
+      {{:error, :user_does_not_exist}, :receiver} -> {:error, :receiver_does_not_exist}
+      error -> error
+    end
   end
 
   def lookup(user) do
     :ets.lookup(:ex_banking, String.to_atom(user))
+  end
+
+  defp is_negative?(amount) do
+    amount = Decimal.new(amount)
+    {false, amount} = {Decimal.negative?(amount), amount}
+  end
+
+  defp compute_money(state, amount, currency) do
+    {:ok, withdraw_money} = Money.new(currency, amount) |> Money.to_currency(state.money.currency)
+    withdraw_money |> Money.round()
   end
 end

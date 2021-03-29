@@ -1,6 +1,6 @@
-defmodule ExBanking.User do
+defmodule ExBanking.Account do
   alias __MODULE__
-  defstruct user: nil, money: Money.new(0, :USD), balance: 0, requests: 0
+  defstruct name: nil, balance: 0, requests: 0, currency: ""
 
-  def add_user(user), do: {:ok, %User{user: user}}
+  def account(user), do: %Account{name: user}
 end
